@@ -1,7 +1,7 @@
 import base64
 import io
 import json
-
+import os
 import openai
 import pandas as pd
 import requests
@@ -16,11 +16,10 @@ app = FastAPI()
 # First, we create a EventHandler class to define
 # how we want to handle the events in the response stream.
 def upload_image_to_imgbb(images_bytes):
-    api_key = "aa0696eab1a460991ba67d2ed95e2602"
     url = "https://api.imgbb.com/1/upload"
     
     payload = {
-        "key": api_key,
+        "key": os.environ.get("IMGBB_KEY"),
         "image": images_bytes,
         "expiration":600
     }
@@ -67,7 +66,7 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
     file_stream = io.BytesIO(csv_bytes)
 
 
-    client = openai.OpenAI(api_key="sk-proj-nfDjEgAqwCfb4k8YKQ6tT3BlbkFJfIaNyUlnkPlepCtjZ0vG")
+    client = openai.OpenAI(api_key=os.environ.get("OPENAI_KEY"))
 
     xfile = client.files.create(
     file=file_stream,
