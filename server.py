@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse
 
 from openai import AssistantEventHandler
 from typing_extensions import override
+from dotenv import load_dotenv
 
+load_dotenv()
 app = FastAPI()
 # First, we create a EventHandler class to define
 # how we want to handle the events in the response stream.
@@ -66,7 +68,7 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
     file_stream = io.BytesIO(csv_bytes)
 
 
-    client = openai.OpenAI(api_key=os.environ.get("OPENAI_KEY"))
+    client = openai.OpenAI()
 
     xfile = client.files.create(
     file=file_stream,
