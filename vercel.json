@@ -1,19 +1,16 @@
 {
-    "version": 2,
-    "builds": [
+    "version":2,
+    "builds":[
         {
-            "src": "server.py",
-            "use": "@vercel/python"
+            "src":"server.py",
+            "use":"@vercel/python"
         }
     ],
-    "routes": [
+    "routes":[
         {
-            "src": "/(.*)",
-            "dest": "server.py"
+            "src":"/(.*)",
+            "dest":"server.py"
+            
         }
-    ],
-    "functions": {
-        "server.py": {
-          "maxDuration": 30
-        },
+    ]
 }
