@@ -12,7 +12,8 @@
             "dest": "server.py"
         }
     ],
-    "config": {
-        "maxDuration": 60
-    }
+    "functions": {
+        "server.py": {
+          "maxDuration": 30
+        },
 }
