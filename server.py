@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import tempfile
 import openai
 import pandas as pd
 import requests
@@ -15,8 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 app = FastAPI()
-# First, we create a EventHandler class to define
-# how we want to handle the events in the response stream.
+
 def upload_image_to_imgbb(images_bytes):
     url = "https://api.imgbb.com/1/upload"
     
@@ -32,7 +32,7 @@ def upload_image_to_imgbb(images_bytes):
     print(url)
     return url
     
-
+"""
 class EventHandler(AssistantEventHandler):    
   @override
   def on_text_created(self, text) -> None:
@@ -54,39 +54,61 @@ class EventHandler(AssistantEventHandler):
         for output in delta.code_interpreter.outputs:
           if output.type == "logs":
             print(f"\n{output.logs}", flush=True)
+"""
 
+global thread
+global lastrun
+global assistant
 
+async def get_file_stream(file):
+    print(file.filename)
+    if file.filename.endswith(".xlsx"):
+        print(".xlsx")
+        file_content = await file.read()
+        df = pd.read_excel(io.BytesIO(file_content), sheet_name=0)
+        csv_string = df.to_csv(index=False)
+        csv_bytes = csv_string.encode()
+        file_stream = io.BytesIO(csv_bytes)
+    
+    if file.filename.endswith(".csv"):
+        print(".csv")
+        file_content = await file.read()
+        file_stream = io.BytesIO(file_content)
+
+    if file.filename.endswith(".json"):
+        print(".json")
+        file_content = await file.read()
+        data = json.loads(file_content)
+        df = pd.DataFrame(data)
+        csv_data = df.to_csv(index=False)
+        csv_bytes = csv_data.encode()
+        file_stream = io.BytesIO(csv_bytes)
+
+    return file_stream
+
+client = openai.OpenAI()
 @app.post("/ask_question/")
-async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
+async def ask_question(file: UploadFile = File(None), question: str = Form(...)):
+    global thread
+    global assistant
 
-    #excel to bytes
-    file_content = await file.read()
-    file_stream = io.BytesIO(file_content)
-    df = pd.read_excel(io.BytesIO(file_content), sheet_name=0)
-    csv_string = df.to_csv(index=False)
-    csv_bytes = csv_string.encode()
-    file_stream = io.BytesIO(csv_bytes)
-
-
-    client = openai.OpenAI()
-
-    xfile = client.files.create(
-    file=file_stream,
-    purpose='assistants'
-    )
-
-    assistant = client.beta.assistants.create(
-        instructions="You are a personal data analyst. You have been provided an xlsx file of which the first row corresponds to its columns. When asked a question related to the data provided, write and run code to answer the question.",
-        model="gpt-4-turbo",
-        tools=[{"type": "code_interpreter"}],
-        tool_resources={
-            "code_interpreter": {
-            "file_ids": [xfile.id]
+    if file:
+        file_stream = await get_file_stream(file)
+        xfile = client.files.create(
+        file=file_stream,
+        purpose='assistants'
+        )
+        assistant = client.beta.assistants.create(
+            instructions="You are a personal data analyst. You have been provided a csv file of which the first row corresponds to its columns. When asked a question related to the data provided, write and run code to answer the question.",
+            model="gpt-4-turbo",
+            tools=[{"type": "code_interpreter"}],
+            tool_resources={
+                "code_interpreter": {
+                "file_ids": [xfile.id]
+                }
             }
-        }
-    )
-
-    thread = client.beta.threads.create()
+        )
+        thread = client.beta.threads.create()
 
     run = client.beta.threads.runs.create_and_poll(
     thread_id=thread.id,
@@ -110,7 +132,11 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
         messages = client.beta.threads.messages.list(
             thread_id=thread.id
         )
+        
         contents = messages.data[0].content
+
+
+            
         if contents[0].type == "image_file":
            
             image_file_id = contents[0].image_file.file_id
@@ -131,7 +157,28 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
             except:
                 return contents
             
-        if contents[0].type == "text":
+        elif contents[0].text.annotations:
+            csvfileid = contents[0].text.annotations[0].file_path.file_id
+            filecont =  client.files.content(csvfileid)
+            data = filecont.read()  
+            csv_data_str = data.decode('utf-8') 
+            df = pd.read_csv(io.StringIO(csv_data_str))
+            excel_filename = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False).name
+            df.to_excel(excel_filename, index=False)
+            dfdict = df.to_dict(orient="records")
+            url = 'https://tmpfiles.org/api/v1/upload'
+            files = {'file': open(excel_filename, 'rb')}
+            response = requests.post(url, files=files)
+            
+            file_info = response.json()
+            downloadurl = "https://tmpfiles.org/dl/"+ file_info["data"]["url"].split("https://tmpfiles.org/")[1]
+            print(file_info)
+            return JSONResponse(
+                content={"url":downloadurl, "json":dfdict}
+            )
+
+
+        elif contents[0].type == "text":
             return JSONResponse(
                 content={
                     "text": contents[0].text.value
