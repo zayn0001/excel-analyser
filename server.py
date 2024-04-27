@@ -2,14 +2,14 @@ import base64
 import io
 import json
 import os
-import tempfile
 import openai
 import pandas as pd
 import requests
+from deep_translator import GoogleTranslator
 import uvicorn
+import datetime
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
-
 from openai import AssistantEventHandler
 from typing_extensions import override
 from dotenv import load_dotenv
@@ -59,6 +59,10 @@ class EventHandler(AssistantEventHandler):
 global thread
 global lastrun
 global assistant
+global filename
+global timenow
+timenow = datetime.datetime.now()
+filename = ""
 
 async def get_file_stream(file):
     print(file.filename)
@@ -88,18 +92,26 @@ async def get_file_stream(file):
 
 client = openai.OpenAI()
 @app.post("/ask_question/")
-async def ask_question(file: UploadFile = File(None), question: str = Form(...)):
-    global thread
-    global assistant
+async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
 
-    if file:
+    question = GoogleTranslator(source='auto', target='en').translate(question) 
+
+    now = datetime.datetime.now()
+    global thread
+    global timenow
+    global assistant
+    global filename
+    diff = now - timenow
+    if file.filename!=filename or diff.total_seconds() > 120 :
+        timenow = now
         file_stream = await get_file_stream(file)
         xfile = client.files.create(
         file=file_stream,
         purpose='assistants'
         )
         assistant = client.beta.assistants.create(
-            instructions="You are a personal data analyst. You have been provided a csv file of which the first row corresponds to its columns. When asked a question related to the data provided, write and run code to answer the question.",
+            instructions="You are a personal data analyst. \
+                ",
             model="gpt-4-turbo",
             tools=[{"type": "code_interpreter"}],
             tool_resources={
@@ -109,11 +121,15 @@ async def ask_question(file: UploadFile = File(None), question: str = Form(...))
             }
         )
         thread = client.beta.threads.create()
+        filename = file.filename
 
     run = client.beta.threads.runs.create_and_poll(
     thread_id=thread.id,
     assistant_id=assistant.id,
-    instructions=question,
+    instructions="You have been provided a csv file of which the first row corresponds to its columns. \
+                When asked a question related to the data provided, write and run code to answer the question. \
+                Do not ask any confirming questions. Assume all that is necessary. \
+                Do not mention anything insinuating that a file has been uploaded. Answer the following question: " + question,
     )
 
     """
@@ -134,7 +150,7 @@ async def ask_question(file: UploadFile = File(None), question: str = Form(...))
         )
         
         contents = messages.data[0].content
-
+        print(contents)
 
             
         if contents[0].type == "image_file":
@@ -163,18 +179,18 @@ async def ask_question(file: UploadFile = File(None), question: str = Form(...))
             data = filecont.read()  
             csv_data_str = data.decode('utf-8') 
             df = pd.read_csv(io.StringIO(csv_data_str))
-            excel_filename = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False).name
-            df.to_excel(excel_filename, index=False)
+            #excel_filename = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False).name
+            #df.to_excel(excel_filename, index=False)
             dfdict = df.to_dict(orient="records")
-            url = 'https://tmpfiles.org/api/v1/upload'
-            files = {'file': open(excel_filename, 'rb')}
-            response = requests.post(url, files=files)
+            #url = 'https://tmpfiles.org/api/v1/upload'
+            #files = {'file': open(excel_filename, 'rb')}
+            #response = requests.post(url, files=files)
             
-            file_info = response.json()
-            downloadurl = "https://tmpfiles.org/dl/"+ file_info["data"]["url"].split("https://tmpfiles.org/")[1]
-            print(file_info)
+            #file_info = response.json()
+            #downloadurl = "https://tmpfiles.org/dl/"+ file_info["data"]["url"].split("https://tmpfiles.org/")[1]
+            #print(file_info)
             return JSONResponse(
-                content={"url":downloadurl, "json":dfdict}
+                content={"json":dfdict}
             )
 
 
