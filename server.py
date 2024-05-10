@@ -7,12 +7,11 @@ import pandas as pd
 import requests
 from deep_translator import GoogleTranslator
 import uvicorn
-import datetime
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
-from openai import AssistantEventHandler
 from typing_extensions import override
 from dotenv import load_dotenv
+import database
 
 load_dotenv()
 app = FastAPI()
@@ -56,14 +55,6 @@ class EventHandler(AssistantEventHandler):
             print(f"\n{output.logs}", flush=True)
 """
 
-global thread
-global lastrun
-global assistant
-global filename
-global timenow
-timenow = datetime.datetime.now()
-filename = ""
-
 async def get_file_stream(file):
     print(file.filename)
     if file.filename.endswith(".xlsx"):
@@ -89,64 +80,74 @@ async def get_file_stream(file):
         file_stream = io.BytesIO(csv_bytes)
 
     return file_stream
-
+    
 client = openai.OpenAI()
 @app.post("/ask_question/")
-async def ask_question(file: UploadFile = File(...), question: str = Form(...)):
+async def ask_question(file: UploadFile = File(...), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
 
     question = GoogleTranslator(source='auto', target='en').translate(question) 
 
-    now = datetime.datetime.now()
-    global thread
-    global timenow
-    global assistant
-    global filename
-    diff = now - timenow
-    if file.filename!=filename or diff.total_seconds() > 120 :
-        timenow = now
-        file_stream = await get_file_stream(file)
-        xfile = client.files.create(
-        file=file_stream,
-        purpose='assistants'
-        )
-        assistant = client.beta.assistants.create(
-            instructions="You are a personal data analyst. \
-                ",
-            model="gpt-4-turbo",
-            tools=[{"type": "code_interpreter"}],
-            tool_resources={
-                "code_interpreter": {
-                "file_ids": [xfile.id]
-                }
-            }
-        )
-        thread = client.beta.threads.create()
-        filename = file.filename
+    file_stream = await get_file_stream(file)
 
-    run = client.beta.threads.runs.create_and_poll(
-    thread_id=thread.id,
-    assistant_id=assistant.id,
-    instructions="You have been provided a csv file of which the first row corresponds to its columns. \
-                When asked a question related to the data provided, write and run code to answer the question. \
-                Do not ask any confirming questions. Assume all that is necessary. \
-                Do not mention anything insinuating that a file has been uploaded. Answer the following question: " + question,
+    xfile = client.files.create(
+    file=file_stream,
+    purpose='assistants'
     )
+    assistant = client.beta.assistants.create(
+        instructions="You are a personal data analyst.",
+        model="gpt-4-turbo",
+        tools=[{"type": "code_interpreter"}],
+        tool_resources={
+            "code_interpreter": {
+            "file_ids": [xfile.id]
+            }
+        }
+    )
+    threadid = database.get_user_thread(user)
+    print(threadid)
+    if threadid:
+        if restart:
+            thread = client.beta.threads.create()
+            threadid = thread.id
+            database.update_user_thread(user=user, threadid=threadid)
 
-    """
-    with client.beta.threads.runs.stream(
-        thread_id=thread.id,
-        assistant_id=assistant.id,
-        instructions=question,
-        event_handler=EventHandler(),
-    ) as stream:
-        stream.until_done()
-    """
+            run = client.beta.threads.runs.create_and_poll(
+                thread_id=threadid,
+                assistant_id=assistant.id,
+                instructions="You have been provided a csv file of which the first row corresponds to its columns. \
+                            When asked a question related to the data provided, write and run code to answer the question. \
+                            Do not ask any confirming questions. Assume all that is necessary. \
+                            Do not mention anything insinuating that a file has been uploaded. Answer the following question: " + question,
+            )
+        else:
+            run = client.beta.threads.runs.create_and_poll(
+                thread_id=threadid,
+                assistant_id=assistant.id,
+                instructions=question
+            )
+
+    else:
+        thread = client.beta.threads.create()
+        threadid = thread.id
+        database.create_user_thread(user=user, threadid=threadid)
+
+        run = client.beta.threads.runs.create_and_poll(
+            thread_id=threadid,
+            assistant_id=assistant.id,
+            instructions="You have been provided a csv file of which the first row corresponds to its columns. \
+                        When asked a question related to the data provided, write and run code to answer the question. \
+                        Do not ask any confirming questions. Assume all that is necessary. \
+                        Do not mention anything insinuating that a file has been uploaded. Answer the following question: " + question,
+        )
+
+    
 
 
     if run.status == 'completed': 
 
         messages = client.beta.threads.messages.list(
-            thread_id=thread.id
+            thread_id=threadid,
+            run_id=run.id
         )
         
         contents = messages.data[0].content
