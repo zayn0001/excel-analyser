@@ -30,30 +30,6 @@ def upload_image_to_imgbb(images_bytes):
     url = result["data"]["url"]
     print(url)
     return url
-    
-"""
-class EventHandler(AssistantEventHandler):    
-  @override
-  def on_text_created(self, text) -> None:
-    print(f"\nassistant > ", end="", flush=True)
-      
-  @override
-  def on_text_delta(self, delta, snapshot):
-    print(delta.value, end="", flush=True)
-      
-  def on_tool_call_created(self, tool_call):
-    print(f"\nassistant > {tool_call.type}\n", flush=True)
-  
-  def on_tool_call_delta(self, delta, snapshot):
-    if delta.type == 'code_interpreter':
-      if delta.code_interpreter.input:
-        print(delta.code_interpreter.input, end="", flush=True)
-      if delta.code_interpreter.outputs:
-        print(f"\n\noutput >", flush=True)
-        for output in delta.code_interpreter.outputs:
-          if output.type == "logs":
-            print(f"\n{output.logs}", flush=True)
-"""
 
 async def get_file_stream(file):
     print(file.filename)
@@ -140,9 +116,6 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
                         Do not mention anything insinuating that a file has been uploaded. Answer the following question: " + question,
         )
 
-    
-
-
     if run.status == 'completed': 
 
         messages = client.beta.threads.messages.list(
@@ -180,16 +153,8 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
             data = filecont.read()  
             csv_data_str = data.decode('utf-8') 
             df = pd.read_csv(io.StringIO(csv_data_str))
-            #excel_filename = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False).name
-            #df.to_excel(excel_filename, index=False)
             dfdict = df.to_dict(orient="records")
-            #url = 'https://tmpfiles.org/api/v1/upload'
-            #files = {'file': open(excel_filename, 'rb')}
-            #response = requests.post(url, files=files)
-            
-            #file_info = response.json()
-            #downloadurl = "https://tmpfiles.org/dl/"+ file_info["data"]["url"].split("https://tmpfiles.org/")[1]
-            #print(file_info)
+    
             return JSONResponse(
                 content={"json":dfdict}
             )
@@ -201,8 +166,199 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
                     "text": contents[0].text.value
                 }
             )
-
         
+
+@app.post("/create_product/")
+async def ask_question(question: str = Form(...)):
+    assistant = client.beta.assistants.create(
+        instructions="You are a json formatter. You will be provided with text of details of a product and you have to provide the formatted json of it",
+        model="gpt-4-turbo",
+        tools=[{"type": "code_interpreter"}]
+    )
+    thread = client.beta.threads.create()
+
+    run = client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant.id,
+                instructions= "You are a json formatter. You will be provided with text of details of a product and you have to provide the formatted json of it. they should all be in double quotes according to json structure\
+                     in the creation of products there are some mandatory fields, such as the name, category, \
+                    brand, VAT and type of product. The different types are  (simple, size and colours, formats, batches). if the product is type size and colors, sizes and colors must be added to the mandatory fields \
+                        if the product type is formats, you must add the formats as a mandatory field. \
+                            if the product type is batches, you must add the batches as a mandatory field. if the necessary values for a specifc type is not mentioned, let me know. \
+                                 Example:\n \
+                                    Input: Can you create a product with formats, with the title PERFUME, PERFUMES FOR MEN category, CHANEL brand, VAT 22, price €100, formats 50ml,100ml \n \
+                                    Output: { \
+                                    name: 'PERFUME', \
+                                    type: 'formats' \
+                                    category: 'PERFUMES FOR MEN',\
+                                    brand: 'CHANEL',\
+                                    VAT: 22,\
+                                    price: 100,\
+                                    formats; ['50ml','100ml']\
+                                     \
+                                    } " + question
+            )
+    
+
+    if run.status == 'completed': 
+
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            run_id=run.id
+        )
+        
+        contents = messages.data[0].content
+        msg = contents[0].text.value
+        if msg[0]=="{" or msg[0]=="[":
+            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
+        else: 
+            return JSONResponse(status_code=404, content=msg)
+        
+
+@app.post("/create_brand/")
+async def ask_question(question: str = Form(...)):
+    assistant = client.beta.assistants.create(
+        instructions="You are a json formatter. You will be provided with text of details of a brand and you have to provide the formatted json of it",
+        model="gpt-4-turbo",
+        tools=[{"type": "code_interpreter"}]
+    )
+    thread = client.beta.threads.create()
+
+    run = client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant.id,
+                instructions= "You are a json formatter. You will be provided with name of a brand or a list of brands and you have to provide the formatted json of it. a brand also only one attribute, that is, name. they should all be in double quotes according to json structure. numbers should be in number format.  \
+                                 Example:\n \
+                                    Input: Can you create a brand with name NIKE \n \
+                                    Output: { \
+                                    \"name\": 'NIKE', \
+                                     \
+                                    } \n \
+                                    Example:\n \
+                                    Input: Can you create a list of these brands : NIKE,ADIDAS \n \
+                                    Output: [ { \n \
+                                    name:'NIKE' \n \
+                                    }, \n \
+                                    { \n \
+                                     name: 'ADIDAS'     \n \
+                                    }\n " + question
+            )
+    
+
+    if run.status == 'completed': 
+
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            run_id=run.id
+        )
+        
+        contents = messages.data[0].content
+        msg = contents[0].text.value
+
+        msg = msg.replace("```json", "").replace("```","")
+        if msg[0]=="{" or msg[0]=="[" :
+            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
+        else: 
+            return JSONResponse(status_code=404, content=msg)
+        
+
+
+@app.post("/create_furnisher/")
+async def ask_question(question: str = Form(...)):
+    assistant = client.beta.assistants.create(
+        instructions="You are a json formatter. You will be provided with text of details of a furnisher and you have to provide the formatted json of it",
+        model="gpt-4-turbo",
+        tools=[{"type": "code_interpreter"}]
+    )
+    thread = client.beta.threads.create()
+
+    run = client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant.id,
+                instructions= "You are a json formatter. You will be provided with name of a furnisher or a list of furnishers and you have to provide the formatted json of it. a furnisher has the following attributes: name, surname, company, address, city, vat_number, tax_id_code, country. they should all be in double quotes according to json structure. \
+                   if any field is missing or not proper from the input, let me know. numbers should be in number format\
+                                 Example:\n \
+                                    Input: Can you create a furnisher with name : TEST ,surname testtest, company TEST PROVA, vat number 12345678901,address street 10, city Rome, country Italy, tax id 423235 \n \
+                                    Output: { \
+                                    \"name\": 'TEST', \
+                                    \"surname\": 'testtest', \
+                                    \"company\": 'TEST PROVA', \
+                                    \"vat_number\": 12345678901, \
+                                    \"address\": 'street 10', \
+                                    \"city\": 'Rome', \
+                                    \"country\": 'Italy', \
+                                    \"tax_id_code\": 423235, \
+                                     \
+                                    } \n \
+                                    " + question
+            )
+    
+
+    if run.status == 'completed': 
+
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            run_id=run.id
+        )
+        
+        contents = messages.data[0].content
+        msg = contents[0].text.value
+
+        msg = msg.replace("```json", "").replace("```","")
+        if msg[0]=="{" or msg[0]=="[" :
+            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
+        else: 
+            return JSONResponse(status_code=404, content=msg)
+
+
+
+@app.post("/create_customer/")
+async def ask_question(question: str = Form(...)):
+    assistant = client.beta.assistants.create(
+        instructions="You are a json formatter. You will be provided with text of details of a customer and you have to provide the formatted json of it",
+        model="gpt-4-turbo",
+        tools=[{"type": "code_interpreter"}]
+    )
+    thread = client.beta.threads.create()
+
+    run = client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant.id,
+                instructions= "You are a json formatter. You will be provided with name of a customer or a list of customers and you have to provide the formatted json of it. a customer has the following attributes: name, surname, company, address, city, vat_number, tax_id_code, country. they should all be in double quotes according to json structure. \
+                   if any field is missing or not proper from the input, let me know. numbers should be in number format\
+                                 Example:\n \
+                                    Input: Can you create a customer with name : TEST ,surname testtest, company TEST PROVA, vat number 12345678901,address street 10, city Rome, country Italy, tax id 423235 \n \
+                                    Output: { \
+                                    \"name\": 'TEST', \
+                                    \"surname\": 'testtest', \
+                                    \"company\": 'TEST PROVA', \
+                                    \"vat_number\": 12345678901, \
+                                    \"address\": 'street 10', \
+                                    \"city\": 'Rome', \
+                                    \"country\": 'Italy', \
+                                    \"tax_id_code\": 423235, \
+                                     \
+                                    } \n \
+                                    " + question
+            )
+    
+
+    if run.status == 'completed': 
+
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            run_id=run.id
+        )
+        
+        contents = messages.data[0].content
+        msg = contents[0].text.value
+
+        msg = msg.replace("```json", "").replace("```","")
+        if msg[0]=="{" or msg[0]=="[" :
+            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
+        else: 
+            return JSONResponse(status_code=404, content=msg)
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
