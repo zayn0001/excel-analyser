@@ -14,12 +14,11 @@ def get_user_thread(user):
     collection = db['messages']
     
     # Query the collection for the user
-    user_data = collection.find_one({'user': user})
-    
-    # If user exists, return the corresponding field value
-    if user_data:
+    try:
+        user_data = collection.find_one({'user': user})
+
         return user_data['threadid']
-    else:
+    except:
         return None
 
 def create_user_thread(user, threadid):

@@ -21,7 +21,7 @@ client = openai.OpenAI()
 async def ask_question(file: UploadFile = File(...), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
 
     question = GoogleTranslator(source='auto', target='en').translate(question) 
-
+    
     file_stream = await get_file_stream(file)
 
     xfile = client.files.create(
