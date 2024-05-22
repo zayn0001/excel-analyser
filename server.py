@@ -18,27 +18,31 @@ app = FastAPI()
     
 client = openai.OpenAI()
 @app.post("/ask_question/")
-async def ask_question(file: UploadFile = File(...), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
+async def ask_question(file: UploadFile = File(default=None), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
 
     question = GoogleTranslator(source='auto', target='en').translate(question) 
     
-    file_stream = await get_file_stream(file)
+    if file:
+        file_stream = await get_file_stream(file)
 
-    xfile = client.files.create(
-    file=file_stream,
-    purpose='assistants'
-    )
-    assistant = client.beta.assistants.create(
-        instructions="You are a personal data analyst.",
-        model="gpt-4-turbo",
-        tools=[{"type": "code_interpreter"}],
-        tool_resources={
-            "code_interpreter": {
-            "file_ids": [xfile.id]
+        xfile = client.files.create(
+        file=file_stream,
+        purpose='assistants'
+        )
+        assistant = client.beta.assistants.create(
+            instructions="You are a personal data analyst.",
+            model="gpt-4-turbo",
+            tools=[{"type": "code_interpreter"}],
+            tool_resources={
+                "code_interpreter": {
+                "file_ids": [xfile.id]
+                }
             }
-        }
-    )
+        )
+        database.update_user_assistant(user, assistant.id)
+    
     threadid = database.get_user_thread(user)
+    assistantid = database.get_user_assistant(user)
     print(threadid)
     if threadid:
         if restart:
@@ -48,7 +52,7 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
 
             run = client.beta.threads.runs.create_and_poll(
                 thread_id=threadid,
-                assistant_id=assistant.id,
+                assistant_id=assistantid,
                 instructions="You have been provided a csv file of which the first row corresponds to its columns. \
                             When asked a question related to the data provided, write and run code to answer the question. \
                             Do not ask any confirming questions. Assume all that is necessary. \
@@ -57,7 +61,7 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
         else:
             run = client.beta.threads.runs.create_and_poll(
                 thread_id=threadid,
-                assistant_id=assistant.id,
+                assistant_id=assistantid,
                 instructions=question
             )
 
@@ -68,7 +72,7 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
 
         run = client.beta.threads.runs.create_and_poll(
             thread_id=threadid,
-            assistant_id=assistant.id,
+            assistant_id=assistantid,
             instructions="You have been provided a csv file of which the first row corresponds to its columns. \
                         When asked a question related to the data provided, write and run code to answer the question. \
                         Do not ask any confirming questions. Assume all that is necessary. \
@@ -97,6 +101,10 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
             image_url = upload_image_to_imgbb(image_base64)
             
             try:
+                database.convo(user,question,{
+                        "image": image_url,
+                        "text": text
+                    })
                 return JSONResponse(
                     content={
                         "image": image_url,
@@ -113,13 +121,16 @@ async def ask_question(file: UploadFile = File(...), question: str = Form(...), 
             csv_data_str = data.decode('utf-8') 
             df = pd.read_csv(io.StringIO(csv_data_str))
             dfdict = df.to_dict(orient="records")
-    
+            database.convo(user,question,{"json":dfdict})
             return JSONResponse(
                 content={"json":dfdict}
             )
 
 
         elif contents[0].type == "text":
+            database.convo(user,question,{
+                    "text": contents[0].text.value
+                })
             return JSONResponse(
                 content={
                     "text": contents[0].text.value
@@ -139,11 +150,19 @@ async def ask_question(question: str = Form(...)):
     run = client.beta.threads.runs.create_and_poll(
                 thread_id=thread.id,
                 assistant_id=assistant.id,
-                instructions= "You are a json formatter. You will be provided with text of details of a product and you have to provide the formatted json of it. they should all be in double quotes according to json structure\
-                     in the creation of products there are some mandatory fields, such as the name, category, \
-                    brand, VAT and type of product. The different types are  (simple, size and colours, formats, batches). if the product is type size and colors, sizes and colors must be added to the mandatory fields \
+                instructions= "You are a json formatter. You will be provided with text of details of a product and you have to provide the formatted json of it. they should all be in double quotes according to json structure \
+                     in the creation of products there are some mandatory fields, such as the name, category, brand, VAT and type of product. The different types are  (simple, variety, formats, batches). \
+                     if the product is type variety, sizes and colors must be added to the mandatory fields. \
                         if the product type is formats, you must add the formats as a mandatory field. \
-                            if the product type is batches, you must add the batches as a mandatory field. if the necessary values for a specifc type is not mentioned, let me know. \
+                            if the product type is batches, you must add the batches as a mandatory field. \
+                                if the necessary values for a specific type is not mentioned, let me know. \
+                                for the variety product, if only sizes or colors is provided let me know. \
+                                even if i say it is a simple product and give formats or sizes and colors, make it formats type and variety type respectively. \
+                                give more preference to the data provided and less to the type mentioned. \
+                                any other combination other than the ones mentioned are not allowed.\
+                                IF I MENTION SIZES I HAVE TO MENTION COLORS OR IT IS INVALID AND VICE VERSA.\
+                                forgive small spelling mistakes. \
+                                Whenever an invalid input is given, reply it is invalid and give reason in a single sentence. if not invalid reply in the following manner.  \
                                  Example:\n \
                                     Input: Can you create a product with formats, with the title PERFUME, PERFUMES FOR MEN category, CHANEL brand, VAT 22, price €100, formats 50ml,100ml \n \
                                     Output: { \
@@ -168,6 +187,7 @@ async def ask_question(question: str = Form(...)):
         
         contents = messages.data[0].content
         msg = contents[0].text.value
+        msg = msg.replace("```json", "").replace("```","").replace("\n","")
         if msg[0]=="{" or msg[0]=="[":
             return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
         else: 
@@ -213,8 +233,7 @@ async def ask_question(question: str = Form(...)):
         
         contents = messages.data[0].content
         msg = contents[0].text.value
-
-        msg = msg.replace("```json", "").replace("```","")
+        msg = msg.replace("```json", "").replace("```","").replace("\n","")
         if msg[0]=="{" or msg[0]=="[" :
             return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
         else: 
@@ -263,7 +282,7 @@ async def ask_question(question: str = Form(...)):
         contents = messages.data[0].content
         msg = contents[0].text.value
 
-        msg = msg.replace("```json", "").replace("```","")
+        msg = msg.replace("```json", "").replace("```","").replace("\n","")
         if msg[0]=="{" or msg[0]=="[" :
             return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
         else: 
@@ -312,7 +331,7 @@ async def ask_question(question: str = Form(...)):
         contents = messages.data[0].content
         msg = contents[0].text.value
 
-        msg = msg.replace("```json", "").replace("```","")
+        msg = msg.replace("```json", "").replace("```","").replace("\n","")
         if msg[0]=="{" or msg[0]=="[" :
             return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
         else: 
