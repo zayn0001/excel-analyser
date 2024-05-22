@@ -17,6 +17,10 @@ load_dotenv()
 app = FastAPI()
     
 client = openai.OpenAI()
+
+@app.post("/get_history")
+async def ask_question(user: str = Form(...)):
+    return database.get_user_history(user)
 @app.post("/ask_question/")
 async def ask_question(file: UploadFile = File(default=None), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
 

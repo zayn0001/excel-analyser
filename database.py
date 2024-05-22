@@ -21,6 +21,25 @@ def get_user_thread(user):
         return user_data['threadid']
     except:
         return None
+    
+def get_user_history(user):
+    # MongoDB connection URI
+    uri = "mongodb+srv://mishal0404:mishal2003@mishal0404.35lsnon.mongodb.net/?retryWrites=true&w=majority&appName=mishal0404"
+    
+    # Connect to MongoDB
+    client = MongoClient(uri, server_api=ServerApi('1'))
+    
+    # Access the database and collection
+    db = client['data-analysis']
+    collection = db['messages']
+    
+    # Query the collection for the user
+    try:
+        user_data = collection.find_one({'user': user})
+
+        return user_data['old'] + [{"threadid":user_data["threadid"],"convo":user_data["convo"]}]
+    except:
+        return None
 
 def get_user_assistant(user):
     # MongoDB connection URI
