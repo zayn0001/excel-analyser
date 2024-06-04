@@ -60,8 +60,7 @@ def get_all_filenames(user):
     
     if user_data and 'files' in user_data:
         # Extract filenames from the files list
-        filenames = [list(file.keys())[0] for file in user_data['files']]
-        return filenames
+        return user_data['files']
     
     # If the user or files are not found, return an empty list
     return []
@@ -105,7 +104,7 @@ def get_user_history(user):
     try:
         user_data = collection.find_one({'user': user})
 
-        return user_data['old'] + [{"threadid":user_data["threadid"],"convo":user_data["convo"]}]
+        return  [{"threadid":user_data["threadid"],"convo":user_data["convo"]}] + user_data['old']
     except:
         return None
 
