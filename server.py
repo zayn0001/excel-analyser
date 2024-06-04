@@ -1,38 +1,105 @@
-import base64
-import io
-import json
-import os
 import openai
-import pandas as pd
-import requests
 from deep_translator import GoogleTranslator
 import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
-from typing_extensions import override
 from dotenv import load_dotenv
 import database
 from functions import *
+import constants
 load_dotenv()
-app = FastAPI()
-    
+
+app = FastAPI()    
 client = openai.OpenAI()
+
+
+@app.post("/get_email")
+async def ask_question(request: str = Form(...)):
+    thread = client.beta.threads.create()
+    assistant = client.beta.assistants.create(
+            instructions="You are an email generator",
+            model="gpt-4o")
+    run = client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant.id,
+                instructions="You will be provided with a request to compose an email. the email should be structured in json format like {\"subject\":\"Request for leave\", \"content\":\"...\"}. Do not add an email signature or a best regards. Only include the body. Do not answer with anything but the json. The request is the following: " + request,
+    )
+    if run.status == 'completed': 
+
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            run_id=run.id
+        )
+        contents = messages.data[0].content
+        print(contents[0].text.value)
+        msg = get_json(contents)
+        return JSONResponse(content=msg, status_code=200)
+    
+
+
+@app.post("/get_whatsapp")
+async def ask_question(request: str = Form(...)):
+    thread = client.beta.threads.create()
+    assistant = client.beta.assistants.create(
+            instructions="You are a whatsapp message generator",
+            model="gpt-4o")
+    run = client.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant.id,
+                instructions="You will be provided with a request to compose a Whatsapp message. the Whatsapp message should be structured in json format like {\"content\":\"...\"}. Do not add a signature or a best regards. Only include the body. Use appropriate bold and italics formats. Do not answer with anything but the json. The request is the following: " + request,
+    )
+    if run.status == 'completed': 
+
+        messages = client.beta.threads.messages.list(
+            thread_id=thread.id,
+            run_id=run.id
+        )
+        contents = messages.data[0].content
+        print(contents[0].text.value)
+        msg = get_json(contents)
+        return JSONResponse(content=msg, status_code=200)
+
+
+@app.post("/add_file")
+async def ask_question(user: str = Form(...), file: UploadFile = File(...)):
+    file_stream = await get_file_stream(file)
+    xfile = client.files.create(file=file_stream,purpose='assistants')
+    assistant = client.beta.assistants.create(
+            instructions="You are a personal data analyst.",
+            model="gpt-4-turbo",
+            tools=[{"type": "code_interpreter"}],
+            tool_resources={
+                "code_interpreter": {
+                "file_ids": [xfile.id]
+                }
+            }
+        )
+    database.add_user_file(user, file.filename,assistant.id)
+    return JSONResponse(content={"filename":file.filename})
+
+@app.post("/get_files")
+async def ask_question(user: str = Form(...)):
+    
+    files = database.get_all_filenames(user)
+    return JSONResponse(content={"files":files})
 
 @app.post("/get_history")
 async def ask_question(user: str = Form(...)):
     return database.get_user_history(user)
-@app.post("/ask_question/")
-async def ask_question(file: UploadFile = File(default=None), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
 
-    question = GoogleTranslator(source='auto', target='en').translate(question) 
-    
-    if file:
-        file_stream = await get_file_stream(file)
 
-        xfile = client.files.create(
-        file=file_stream,
-        purpose='assistants'
-        )
+@app.post("/ask_question")
+async def ask_question(assistantid: str = Form(None), question: str = Form(...), user: str = Form(...), restart: bool = Form(default=False)):
+
+    question = GoogleTranslator(source='auto', target='en').translate(question)
+    print("hi")
+    if assistantid:
+        pass
+    else:
+        dataset = get_dataset_name(question=question)
+        apiurl = constants.DATASETS[dataset]
+        filestream = get_file_stream_from_api(apiurl)
+        xfile = client.files.create(file=filestream,purpose='assistants')
         assistant = client.beta.assistants.create(
             instructions="You are a personal data analyst.",
             model="gpt-4-turbo",
@@ -43,11 +110,13 @@ async def ask_question(file: UploadFile = File(default=None), question: str = Fo
                 }
             }
         )
-        database.update_user_assistant(user, assistant.id)
-    
+        assistantid = assistant.id
+
+
+
+
     threadid = database.get_user_thread(user)
-    assistantid = database.get_user_assistant(user)
-    print(threadid)
+
     if threadid:
         if restart:
             thread = client.beta.threads.create()
@@ -85,62 +154,26 @@ async def ask_question(file: UploadFile = File(default=None), question: str = Fo
 
     if run.status == 'completed': 
 
-        messages = client.beta.threads.messages.list(
-            thread_id=threadid,
-            run_id=run.id
-        )
-        
+        messages = client.beta.threads.messages.list(thread_id=threadid,run_id=run.id)
         contents = messages.data[0].content
-        print(contents)
-
             
         if contents[0].type == "image_file":
-           
-            image_file_id = contents[0].image_file.file_id
-            text = contents[1].text.value
-            
-            image_data = client.files.content(image_file_id)
-            image_data_bytes = image_data.read()
-            image_base64 = base64.b64encode(image_data_bytes).decode('utf-8')
-            image_url = upload_image_to_imgbb(image_base64)
-            
-            try:
-                database.convo(user,question,{
-                        "image": image_url,
-                        "text": text
-                    })
-                return JSONResponse(
-                    content={
-                        "image": image_url,
-                        "text": text
-                    }
-                )
-            except:
-                return contents
+            image_url, text = get_image_url_and_text(contents)
+            database.convo(user,question,{"image":image_url, "text":text})
+            return JSONResponse(content={"image":image_url, "text":text})
             
         elif contents[0].text.annotations:
-            csvfileid = contents[0].text.annotations[0].file_path.file_id
-            filecont =  client.files.content(csvfileid)
-            data = filecont.read()  
-            csv_data_str = data.decode('utf-8') 
-            df = pd.read_csv(io.StringIO(csv_data_str))
-            dfdict = df.to_dict(orient="records")
+            dfdict = get_json_of_file(contents)
             database.convo(user,question,{"json":dfdict})
-            return JSONResponse(
-                content={"json":dfdict}
-            )
-
-
-        elif contents[0].type == "text":
-            database.convo(user,question,{
-                    "text": contents[0].text.value
-                })
-            return JSONResponse(
-                content={
-                    "text": contents[0].text.value
-                }
-            )
+            return JSONResponse(content={"json":dfdict})
         
+        elif contents[0].type == "text":
+            database.convo(user,question,{"text": contents[0].text.value})
+            return JSONResponse(content={"text": contents[0].text.value})
+        
+
+
+
 
 @app.post("/create_product/")
 async def ask_question(question: str = Form(...)):
@@ -179,7 +212,7 @@ async def ask_question(question: str = Form(...)):
                                     formats; ['50ml','100ml']\
                                      \
                                     } " + question
-            )
+    )
     
 
     if run.status == 'completed': 
@@ -188,14 +221,13 @@ async def ask_question(question: str = Form(...)):
             thread_id=thread.id,
             run_id=run.id
         )
-        
         contents = messages.data[0].content
-        msg = contents[0].text.value
-        msg = msg.replace("```json", "").replace("```","").replace("\n","")
-        if msg[0]=="{" or msg[0]=="[":
-            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
-        else: 
-            return JSONResponse(status_code=404, content=msg)
+        msg = get_json(contents)
+        return JSONResponse(content=msg, status_code=200)
+        
+
+
+
         
 
 @app.post("/create_brand/")
@@ -234,14 +266,10 @@ async def ask_question(question: str = Form(...)):
             thread_id=thread.id,
             run_id=run.id
         )
-        
         contents = messages.data[0].content
-        msg = contents[0].text.value
-        msg = msg.replace("```json", "").replace("```","").replace("\n","")
-        if msg[0]=="{" or msg[0]=="[" :
-            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
-        else: 
-            return JSONResponse(status_code=404, content=msg)
+        msg = get_json(contents)
+        return JSONResponse(content=msg, status_code=200)
+        
         
 
 
@@ -282,15 +310,9 @@ async def ask_question(question: str = Form(...)):
             thread_id=thread.id,
             run_id=run.id
         )
-        
         contents = messages.data[0].content
-        msg = contents[0].text.value
-
-        msg = msg.replace("```json", "").replace("```","").replace("\n","")
-        if msg[0]=="{" or msg[0]=="[" :
-            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
-        else: 
-            return JSONResponse(status_code=404, content=msg)
+        msg = get_json(contents)
+        return JSONResponse(content=msg, status_code=200)
 
 
 
@@ -331,15 +353,12 @@ async def ask_question(question: str = Form(...)):
             thread_id=thread.id,
             run_id=run.id
         )
-        
         contents = messages.data[0].content
-        msg = contents[0].text.value
+        msg = get_json(contents)
+        return JSONResponse(content=msg, status_code=200)
 
-        msg = msg.replace("```json", "").replace("```","").replace("\n","")
-        if msg[0]=="{" or msg[0]=="[" :
-            return JSONResponse(content=json.loads(contents[0].text.value), status_code=200)
-        else: 
-            return JSONResponse(status_code=404, content=msg)
+
+
 
 
 if __name__ == "__main__":
